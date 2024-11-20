@@ -108,204 +108,7 @@ class Data(object):
             print('第%d种属性，为%d，频率为%f' % (i + 1, self.domain[i], self.true_p[i]))
 
 
-class EFM_USER(object):
-    def __init__(self, epsilon: float, domain: list, data: int, d: int, m: int):
-        super(EFM_USER, self).__init__()
-        # 隐私预算
-        self.epsilon = epsilon
-        # 原始数据定义域
-        self.domain = domain
-        # 原始数据定义域的长度
-        self.domain_length = len(domain)
-        # 用户的原始数据
-        self.data = data
-        # 扰动数据
-        self.per_data = 0
-        # 论文方案中使用的两个参数，m和d
-        # m是hash后的定义域大小
-        self.m = m
-        # d是用户扰动后数据中1的个数
-        self.d = d
-
-        # 为使用方便，定义e^\epsilon
-        e_epsilon = np.exp(self.epsilon)
-        # 方案中所用到的概率
-        # TODO 这里的分子到底要不要乘以self.d，顿师兄的论文中是不是有笔误
-        self.q = (e_epsilon * self.d) / (e_epsilon * self.d + self.m - self.d)
-
-    def run(self):
-        # 用户数据被hash到0到m-1中的一个数字
-        # 种子在100000内随机取一个，这个范围其实不是很重要
-        seed = random.randint(0, 100000)
-        hash_data = xxhash.xxh32(str(self.data), seed=seed).intdigest() % self.m
-        # 目前的定义域，0到m-1
-        hash_domain = [x for x in range(self.m)]
-        # 用户数据位于定义域中的索引
-        user_index = hash_domain.index(hash_data)
-        # 去除了用户数据后的定义域索引
-        hash_domain_without_user = copy.deepcopy(hash_domain)
-        hash_domain_without_user.remove(user_index)
-
-        # 生成长度为m的二进制向量
-        y = [0 for _ in range(self.m)]
-        temp = np.random.uniform()
-        # 用户位设置为1，再挑选d-1个不同的值
-        if temp < self.q:
-            y[user_index] = 1
-            temp_list = random.sample(hash_domain_without_user, self.d - 1)
-            for i in temp_list:
-                y[i] = 1
-        # 用户位设置为0，再挑选d个不同的值
-        else:
-            temp_list = random.sample(hash_domain_without_user, self.d)
-            for i in temp_list:
-                y[i] = 1
-
-        self.per_data = [seed, y]
-
-    def get_per_data(self):
-        return self.per_data
-
-
-class EFM_SERVER(object):
-    def __init__(self, epsilon: float, domain: list, per_datalist: list, d: int, m: int):
-        super(EFM_SERVER, self).__init__()
-        # 隐私预算
-        self.epsilon = epsilon
-        # 原始数据定义域
-        self.domain = domain
-        # 原始数据定义域的长度
-        self.domain_length = len(domain)
-        # 所有用户的扰动数据
-        self.per_datalist = per_datalist
-        # 用户数量
-        self.n = len(per_datalist)
-        # 频率估计结果
-        self.es_data = []
-        # 论文方案中使用的两个参数，m和d
-        # m是hash后的定义域大小
-        self.m = m
-        # d是用户扰动后数据中1的个数
-        self.d = d
-
-        # 为使用方便，定义e^\epsilon
-        e_epsilon = np.exp(self.epsilon)
-
-        # 方案中所用到的概率
-        self.q = (e_epsilon * self.d) / (e_epsilon * self.d + self.m - self.d)
-
-    def estimate(self):
-        for x in self.domain:
-            count = 0
-            for user_seed_and_data in self.per_datalist:
-                hash_x = xxhash.xxh32(str(x), seed=user_seed_and_data[0]).intdigest() % self.m
-                if user_seed_and_data[1][hash_x] == 1:
-                    count += 1
-            rs = (self.m * count - self.n * self.d) / (self.n * (self.m * self.q - self.d))
-            self.es_data.append(rs)
-
-    def get_es_data(self):
-        return self.es_data
-
-
-class FLH_USER(object):
-    def __init__(self, epsilon: float, domain: list, k: int, data: int, g=2):
-        super(FLH_USER, self).__init__()
-        # 隐私预算
-        self.epsilon = epsilon
-        # 原始数据定义域
-        self.domain = domain
-        # 原始数据定义域长度
-        self.d = len(domain)
-        # 哈希函数的数量
-        self.k = k
-        self.g = g
-        # 用户原始数据
-        self.data = data
-        # 扰动数据
-        self.per_data = []
-        # e^\epsilon
-        e_epsilon = np.exp(self.epsilon)
-        # 协议中的扰动概率
-        self.p = e_epsilon / (e_epsilon + self.g - 1)
-        self.q = 1.0 / (e_epsilon + self.g - 1)
-
-    def run(self):
-        encode_x = self.encode(self.data)
-        perturb_x = self.perturb(encode_x)
-        self.per_data = perturb_x
-
-    def encode(self, data: int):
-        seed = random.randint(0, self.k - 1)
-        hash_data = (xxhash.xxh32(str(data), seed=seed).intdigest() % self.g)
-        return seed, hash_data
-
-    # 返回扰动后的数据
-    def perturb(self, encode_list):
-        per_x = encode_list[1]
-        p_sample = np.random.random_sample()
-        if p_sample > self.p - self.q:
-            per_x = np.random.randint(0, self.g)
-        return encode_list[0], per_x
-
-    def get_per_data(self):
-        return self.per_data
-
-
-class FLH_SERVER(object):
-    def __init__(self, epsilon: float, domain: list, k: int, per_datalist: list, g=2):
-        super(FLH_SERVER, self).__init__()
-        # 隐私预算
-        self.epsilon = epsilon
-        # 原始数据定义域
-        self.domain = domain
-        # 原始数据定义域长度
-        self.d = len(domain)
-        # 哈希函数的数量
-        self.k = k
-        self.g = g
-        # 用户原始数据
-        self.per_datalist = per_datalist
-        # 用户数量
-        self.n = len(per_datalist)
-        # 哈希计数矩阵
-        self.hash_counts = np.zeros((self.k, self.g))
-        # 频率估计结果
-        self.es_data = []
-        # e^\epsilon
-        e_epsilon = np.exp(self.epsilon)
-        # 初始化hash矩阵
-        matrix = np.empty((self.k, self.d))
-        for i in range(0, self.k):
-            for j in range(0, self.d):
-                matrix[i][j] = xxhash.xxh32(str(j), seed=i).intdigest() % self.g
-        self.hash_matrix = matrix
-        # 协议中的扰动概率
-        self.p = e_epsilon / (e_epsilon + self.g - 1)
-        self.q = 1.0 / (e_epsilon + self.g - 1)
-
-    def aggregate(self, per_data):
-        seed = per_data[1]
-        per_data = per_data[0]
-        self.hash_counts[seed][per_data] += 1
-
-    def estimate(self):
-        def add(x):
-            res = 0
-            for index_x, val_x in enumerate(x):
-                res += self.hash_counts[index_x, int(val_x)]
-            return res
-
-        self.aggregated_data = np.apply_along_axis(add, 0, self.hash_matrix)
-        a = self.g / (self.p * self.g - 1)
-        b = self.n / (self.p * self.g - 1)
-        rs = a * self.aggregated_data - b
-        self.es_data.append(rs)
-
-    def get_es_data(self):
-        return self.es_data
-
-
+# 类别型数据
 class GRR_USER(object):
     def __init__(self, epsilon: float, domain: list, data: int):
         super(GRR_USER, self).__init__()
@@ -383,261 +186,6 @@ class GRR_SERVER(object):
         for x in self.domain:
             x_count = count_dict.get(x, 0)
             rs = (x_count - self.n * self.q) / (self.n * (self.p - self.q))
-            self.es_data.append(rs)
-
-    def get_es_data(self):
-        return self.es_data
-
-
-class OLH_USER(object):
-    def __init__(self, epsilon, domain, data):
-        super(OLH_USER, self).__init__()
-        # 隐私预算
-        self.epsilon = epsilon
-        # 原始数据定义区间
-        self.domain = domain
-        # 用户的原始数据
-        self.data = data
-        # 扰动数据
-        self.per_data = []
-
-        # 为使用方便，定义e^\epsilon
-        e_epsilon = np.exp(self.epsilon)
-
-        # 设置g为最佳本地哈希的值
-        self.g = int(round(e_epsilon)) + 1
-
-        # 协议中的扰动概率
-        self.p = e_epsilon / (e_epsilon + self.g - 1)
-        self.q = 1.0 / (e_epsilon + self.g - 1)
-
-    def run(self):
-        encode_x = self.encode(self.data)
-        perturb_x = self.perturb(encode_x[1])
-        self.per_data = [encode_x[0], perturb_x]
-
-    def encode(self, v: int):
-        seed = random.randint(0, 100000)
-        hash = (xxhash.xxh32(str(v), seed=seed).intdigest() % self.g)
-        return seed, hash
-
-    def perturb(self, x: int):
-        new_domain = [i for i in range(self.g)]
-        if np.random.uniform(0, 1) < self.p:
-            return x
-        else:
-            per_x = choice(new_domain)
-            # 当随机选择的元素与之前的x一致时，再进行随机选择，直到不一致为止
-            while per_x == x:
-                per_x = choice(new_domain)
-            return per_x
-
-    def get_per_data(self):
-        return self.per_data
-
-
-class OLH_SERVER(object):
-    def __init__(self, epsilon: float, domain: list, per_datalist: list):
-        super(OLH_SERVER, self).__init__()
-        # 隐私预算
-        self.epsilon = epsilon
-        # 扰动数据列表
-        self.per_datalist = per_datalist
-        # 用户数量
-        self.n = len(per_datalist)
-        # 频率估计结果
-        self.es_data = []
-        # 值域
-        self.domain = domain
-
-        e_epsilon = np.exp(self.epsilon)
-
-        # 设置g为最佳本地哈希的值
-        self.g = int(round(e_epsilon)) + 1
-
-        # 协议中的扰动概率
-        self.p = e_epsilon / (e_epsilon + self.g - 1)
-        self.q = 1 / self.g
-
-    def estimate(self):
-        for x in self.domain:
-            count = 0
-            for data in self.per_datalist:
-                if xxhash.xxh32(str(x), seed=data[0]).intdigest() % self.g == data[1]:
-                    count = count + 1
-            rs = (count - self.n * self.q) / (self.n * (self.p - self.q))
-            self.es_data.append(rs)
-
-    def get_es_data(self):
-        return self.es_data
-
-
-class OUE_USER(object):
-    def __init__(self, epsilon: float, domain: list, data: int):
-        super(OUE_USER, self).__init__()
-        self.epsilon = epsilon  # 隐私预算
-        self.domain = domain  # 原始数据定义域
-        self.d = len(domain)  # 原始数据定义域的长度
-        self.data = data  # 用户的原始数据
-        self.per_data = []  # 扰动数据
-
-        e_epsilon = np.exp(self.epsilon)  # 为使用方便，定义e^\epsilon
-
-        # 协议中的扰动概率
-        self.p = 1 / 2
-        self.q = 1 / (e_epsilon + 1)
-
-    def run(self):
-        encode_x = self.encode(self.data)
-        perturb_x = self.perturb(encode_x)
-        self.per_data = perturb_x
-
-    def encode(self, x) -> list:
-        l = list()
-        user_data_index = self.domain.index(self.data)
-        for i in range(self.d):
-            if i == user_data_index:
-                l.append(1)
-            else:
-                l.append(0)
-        return l
-
-    def perturb(self, x: list) -> list:
-        for i in range(self.d):
-            if x[i] == 1:
-                if np.random.uniform() > self.p:
-                    x[i] = 0
-            elif x[i] == 0:
-                if np.random.uniform() < self.q:
-                    x[i] = 1
-        return x
-
-    def get_per_data(self):
-        return self.per_data
-
-
-class OUE_SERVER(object):
-    def __init__(self, epsilon: float, domain: list, per_datalist: list):
-        super(OUE_SERVER, self).__init__()
-        self.epsilon = epsilon  # 隐私预算
-        self.domain = domain  # 原始数据定义域
-        self.d = len(domain)  # 原始数据定义域的长度
-        self.per_datalist = per_datalist  # 所有用户的扰动数据
-        self.n = len(per_datalist)  # 用户数量
-        self.es_data = []  # 频率估计结果
-
-        e_epsilon = np.exp(self.epsilon)  # 为使用方便，定义e^\epsilon
-
-        # 协议中的扰动概率
-        self.p = 1 / 2
-        self.q = 1 / (e_epsilon + 1)
-
-    def estimate(self):
-        per_data = self.per_datalist
-
-        array = np.sum(per_data, axis=0)
-        count_dict = dict(zip(self.domain, array))
-
-        for x in self.domain:
-            x_count = count_dict.get(x, 0)
-            rs = (x_count - self.n * self.q) / (self.n * (self.p - self.q))
-            self.es_data.append(rs)
-
-    def get_es_data(self):
-        return self.es_data
-
-
-class SS_USER(object):
-    def __init__(self, epsilon: float, domain: list, data: int, d: int):
-        super(SS_USER, self).__init__()
-        # 隐私预算
-        self.epsilon = epsilon
-        # 原始数据定义域
-        self.domain = domain
-        # 原始数据定义域的长度
-        self.domain_length = len(domain)
-        # 为了与论文中保持一致，这里将原始数据定义域的长度重新命名为k
-        self.k = self.domain_length
-        # 用户扰动后数据中1的个数
-        self.d = d
-        # 用户的原始数据
-        self.data = data
-        # 扰动数据
-        self.per_data = 0
-
-        # 为使用方便，定义e^\epsilon
-        e_epsilon = np.exp(self.epsilon)
-
-        # 方案中所用到的概率
-        self.q = (e_epsilon * self.d) / (e_epsilon * self.d + self.k - self.d)
-
-    def run(self):
-        # 为使用方便，定义e^\epsilon
-        e_epsilon = np.exp(self.epsilon)
-
-        # 子集选择比较特殊，编码和扰动过程无法分开，因此直接在run函数中写
-
-        # 用户数据位于定义域中的索引
-        user_index = self.domain.index(self.data)
-        # 去除了用户数据后的定义域索引
-        domain_without_user = [x for x in range(self.domain_length)]
-        domain_without_user.remove(user_index)
-
-        # 生成长度为k的二进制向量
-        y = [0 for _ in range(self.k)]
-        temp = np.random.uniform()
-        # 用户位设置为1，再挑选d-1个不同的值
-        if temp < self.q:
-            y[user_index] = 1
-            temp_list = random.sample(domain_without_user, self.d - 1)
-            for i in temp_list:
-                y[i] = 1
-        # 用户位设置为0，再挑选d个不同的值
-        else:
-            temp_list = random.sample(domain_without_user, self.d)
-            for i in temp_list:
-                y[i] = 1
-
-        self.per_data = y
-
-    def get_per_data(self):
-        return self.per_data
-
-
-class SS_SERVER(object):
-    def __init__(self, epsilon: float, domain: list, per_datalist: list, d: int):
-        super(SS_SERVER, self).__init__()
-        # 隐私预算
-        self.epsilon = epsilon
-        # 原始数据定义域
-        self.domain = domain
-        # 原始数据定义域的长度
-        self.domain_length = len(domain)
-        # 为了与论文中保持一致，这里将原始数据定义域的长度重新命名为k
-        self.k = self.domain_length
-        # 用户扰动后数据中1的个数
-        self.d = d
-        # 所有用户的扰动数据
-        self.per_datalist = per_datalist
-        # 用户数量
-        self.n = len(per_datalist)
-        # 频率估计结果
-        self.es_data = []
-
-        # 为使用方便，定义e^\epsilon
-        e_epsilon = np.exp(self.epsilon)
-
-        # 方案中所用到的概率
-        self.q = (e_epsilon * self.d) / (e_epsilon * self.d + self.k - self.d)
-
-    def estimate(self):
-        per_data = self.per_datalist
-        array = np.sum(per_data, axis=0)
-        count_dict = dict(zip(self.domain, array))
-
-        for x in self.domain:
-            x_count = count_dict.get(x, 0)
-            rs = ((self.k - 1) * x_count - self.n * self.d + self.n * self.q) / (self.n * (self.k * self.q - self.d))
             self.es_data.append(rs)
 
     def get_es_data(self):
@@ -732,6 +280,371 @@ class SUE_SERVER(object):
         return self.es_data
 
 
+class OUE_USER(object):
+    def __init__(self, epsilon: float, domain: list, data: int):
+        super(OUE_USER, self).__init__()
+        self.epsilon = epsilon  # 隐私预算
+        self.domain = domain  # 原始数据定义域
+        self.d = len(domain)  # 原始数据定义域的长度
+        self.data = data  # 用户的原始数据
+        self.per_data = []  # 扰动数据
+
+        e_epsilon = np.exp(self.epsilon)  # 为使用方便，定义e^\epsilon
+
+        # 协议中的扰动概率
+        self.p = 1 / 2
+        self.q = 1 / (e_epsilon + 1)
+
+    def run(self):
+        encode_x = self.encode(self.data)
+        perturb_x = self.perturb(encode_x)
+        self.per_data = perturb_x
+
+    def encode(self, x) -> list:
+        l = list()
+        user_data_index = self.domain.index(self.data)
+        for i in range(self.d):
+            if i == user_data_index:
+                l.append(1)
+            else:
+                l.append(0)
+        return l
+
+    def perturb(self, x: list) -> list:
+        for i in range(self.d):
+            if x[i] == 1:
+                if np.random.uniform() > self.p:
+                    x[i] = 0
+            elif x[i] == 0:
+                if np.random.uniform() < self.q:
+                    x[i] = 1
+        return x
+
+    def get_per_data(self):
+        return self.per_data
+
+
+class OUE_SERVER(object):
+    def __init__(self, epsilon: float, domain: list, per_datalist: list):
+        super(OUE_SERVER, self).__init__()
+        self.epsilon = epsilon  # 隐私预算
+        self.domain = domain  # 原始数据定义域
+        self.d = len(domain)  # 原始数据定义域的长度
+        self.per_datalist = per_datalist  # 所有用户的扰动数据
+        self.n = len(per_datalist)  # 用户数量
+        self.es_data = []  # 频率估计结果
+
+        e_epsilon = np.exp(self.epsilon)  # 为使用方便，定义e^\epsilon
+
+        # 协议中的扰动概率
+        self.p = 1 / 2
+        self.q = 1 / (e_epsilon + 1)
+
+    def estimate(self):
+        per_data = self.per_datalist
+
+        array = np.sum(per_data, axis=0)
+        count_dict = dict(zip(self.domain, array))
+
+        for x in self.domain:
+            x_count = count_dict.get(x, 0)
+            rs = (x_count - self.n * self.q) / (self.n * (self.p - self.q))
+            self.es_data.append(rs)
+
+    def get_es_data(self):
+        return self.es_data
+
+
+class OLH_USER(object):
+    def __init__(self, epsilon, domain, data):
+        super(OLH_USER, self).__init__()
+        # 隐私预算
+        self.epsilon = epsilon
+        # 原始数据定义区间
+        self.domain = domain
+        # 用户的原始数据
+        self.data = data
+        # 扰动数据
+        self.per_data = []
+
+        # 为使用方便，定义e^\epsilon
+        e_epsilon = np.exp(self.epsilon)
+
+        # 设置g为最佳本地哈希的值
+        self.g = int(round(e_epsilon)) + 1
+
+        # 协议中的扰动概率
+        self.p = e_epsilon / (e_epsilon + self.g - 1)
+        self.q = 1.0 / (e_epsilon + self.g - 1)
+
+    def run(self):
+        encode_x = self.encode(self.data)
+        perturb_x = self.perturb(encode_x[1])
+        self.per_data = [encode_x[0], perturb_x]
+
+    def encode(self, v: int):
+        seed = random.randint(0, 100000)
+        hash = (xxhash.xxh32(str(v), seed=seed).intdigest() % self.g)
+        return seed, hash
+
+    def perturb(self, x: int):
+        new_domain = [i for i in range(self.g)]
+        if np.random.uniform(0, 1) < self.p:
+            return x
+        else:
+            per_x = choice(new_domain)
+            # 当随机选择的元素与之前的x一致时，再进行随机选择，直到不一致为止
+            while per_x == x:
+                per_x = choice(new_domain)
+            return per_x
+
+    def get_per_data(self):
+        return self.per_data
+
+
+class OLH_SERVER(object):
+    def __init__(self, epsilon: float, domain: list, per_datalist: list):
+        super(OLH_SERVER, self).__init__()
+        # 隐私预算
+        self.epsilon = epsilon
+        # 扰动数据列表
+        self.per_datalist = per_datalist
+        # 用户数量
+        self.n = len(per_datalist)
+        # 频率估计结果
+        self.es_data = []
+        # 值域
+        self.domain = domain
+
+        e_epsilon = np.exp(self.epsilon)
+
+        # 设置g为最佳本地哈希的值
+        self.g = int(round(e_epsilon)) + 1
+
+        # 协议中的扰动概率
+        self.p = e_epsilon / (e_epsilon + self.g - 1)
+        self.q = 1 / self.g
+
+    def estimate(self):
+        for x in self.domain:
+            count = 0
+            for data in self.per_datalist:
+                if xxhash.xxh32(str(x), seed=data[0]).intdigest() % self.g == data[1]:
+                    count = count + 1
+            rs = (count - self.n * self.q) / (self.n * (self.p - self.q))
+            self.es_data.append(rs)
+
+    def get_es_data(self):
+        return self.es_data
+
+
+class EFM_USER(object):
+    def __init__(self, epsilon: float, domain: list, data: int):
+        super(EFM_USER, self).__init__()
+        # 隐私预算
+        self.epsilon = epsilon
+        # 原始数据定义域
+        self.domain = domain
+        # 原始数据定义域的长度
+        self.domain_length = len(domain)
+        # 用户的原始数据
+        self.data = data
+        # 扰动数据
+        self.per_data = 0
+        # 论文方案中使用的两个参数，m和d
+        # m是hash后的定义域大小
+        e = math.exp(self.epsilon)
+        k = len(domain)
+        theta = math.sqrt(e * (e * k - e + 1) / (k + e - 1))
+        self.m = int(round(1 + theta))
+        # d是用户扰动后数据中1的个数
+        self.d = 1
+
+        # 为使用方便，定义e^\epsilon
+        e_epsilon = np.exp(self.epsilon)
+        # 方案中所用到的概率
+        self.q = (e_epsilon * self.d) / (e_epsilon * self.d + self.m - self.d)
+
+    def run(self):
+        # 用户数据被hash到0到m-1中的一个数字
+        # 种子在100000内随机取一个，这个范围其实不是很重要
+        seed = random.randint(0, 100000)
+        hash_data = xxhash.xxh32(str(self.data), seed=seed).intdigest() % self.m
+        # 目前的定义域，0到m-1
+        hash_domain = [x for x in range(self.m)]
+        # 用户数据位于定义域中的索引
+        user_index = hash_domain.index(hash_data)
+        # 去除了用户数据后的定义域索引
+        hash_domain_without_user = copy.deepcopy(hash_domain)
+        hash_domain_without_user.remove(user_index)
+
+        # 生成长度为m的二进制向量
+        y = [0 for _ in range(self.m)]
+        temp = np.random.uniform()
+        # 用户位设置为1，再挑选d-1个不同的值
+        if temp < self.q:
+            y[user_index] = 1
+            temp_list = random.sample(hash_domain_without_user, self.d - 1)
+            for i in temp_list:
+                y[i] = 1
+        # 用户位设置为0，再挑选d个不同的值
+        else:
+            temp_list = random.sample(hash_domain_without_user, self.d)
+            for i in temp_list:
+                y[i] = 1
+
+        self.per_data = [seed, y]
+
+    def get_per_data(self):
+        return self.per_data
+
+
+class EFM_SERVER(object):
+    def __init__(self, epsilon: float, domain: list, per_datalist: list):
+        super(EFM_SERVER, self).__init__()
+        # 隐私预算
+        self.epsilon = epsilon
+        # 原始数据定义域
+        self.domain = domain
+        # 原始数据定义域的长度
+        self.domain_length = len(domain)
+        # 所有用户的扰动数据
+        self.per_datalist = per_datalist
+        # 用户数量
+        self.n = len(per_datalist)
+        # 频率估计结果
+        self.es_data = []
+        # 论文方案中使用的两个参数，m和d
+        # m是hash后的定义域大小
+        e = math.exp(self.epsilon)
+        k = len(domain)
+        theta = math.sqrt(e * (e * k - e + 1) / (k + e - 1))
+        self.m = int(round(1 + theta))
+        # d是用户扰动后数据中1的个数
+        self.d = 1
+
+        # 为使用方便，定义e^\epsilon
+        e_epsilon = np.exp(self.epsilon)
+
+        # 方案中所用到的概率
+        self.q = (e_epsilon * self.d) / (e_epsilon * self.d + self.m - self.d)
+
+    def estimate(self):
+        for x in self.domain:
+            count = 0
+            for user_seed_and_data in self.per_datalist:
+                hash_x = xxhash.xxh32(str(x), seed=user_seed_and_data[0]).intdigest() % self.m
+                if user_seed_and_data[1][hash_x] == 1:
+                    count += 1
+            rs = (self.m * count - self.n * self.d) / (self.n * (self.m * self.q - self.d))
+            self.es_data.append(rs)
+
+    def get_es_data(self):
+        return self.es_data
+
+
+class SS_USER(object):
+    def __init__(self, epsilon: float, domain: list, data: int):
+        super(SS_USER, self).__init__()
+        # 隐私预算
+        self.epsilon = epsilon
+        # 原始数据定义域
+        self.domain = domain
+        # 原始数据定义域的长度
+        self.domain_length = len(domain)
+        # 为了与论文中保持一致，这里将原始数据定义域的长度重新命名为k
+        self.k = self.domain_length
+        # 用户扰动后数据中1的个数
+        k = self.k
+        e = math.exp(self.epsilon)
+        self.d = int(round(k / (e + 1)))
+        # 用户的原始数据
+        self.data = data
+        # 扰动数据
+        self.per_data = 0
+
+        # 为使用方便，定义e^\epsilon
+        e_epsilon = np.exp(self.epsilon)
+
+        # 方案中所用到的概率
+        self.q = (e_epsilon * self.d) / (e_epsilon * self.d + self.k - self.d)
+
+    def run(self):
+        # 为使用方便，定义e^\epsilon
+        e_epsilon = np.exp(self.epsilon)
+
+        # 子集选择比较特殊，编码和扰动过程无法分开，因此直接在run函数中写
+
+        # 用户数据位于定义域中的索引
+        user_index = self.domain.index(self.data)
+        # 去除了用户数据后的定义域索引
+        domain_without_user = [x for x in range(self.domain_length)]
+        domain_without_user.remove(user_index)
+
+        # 生成长度为k的二进制向量
+        y = [0 for _ in range(self.k)]
+        temp = np.random.uniform()
+        # 用户位设置为1，再挑选d-1个不同的值
+        if temp < self.q:
+            y[user_index] = 1
+            temp_list = random.sample(domain_without_user, self.d - 1)
+            for i in temp_list:
+                y[i] = 1
+        # 用户位设置为0，再挑选d个不同的值
+        else:
+            temp_list = random.sample(domain_without_user, self.d)
+            for i in temp_list:
+                y[i] = 1
+
+        self.per_data = y
+
+    def get_per_data(self):
+        return self.per_data
+
+
+class SS_SERVER(object):
+    def __init__(self, epsilon: float, domain: list, per_datalist: list):
+        super(SS_SERVER, self).__init__()
+        # 隐私预算
+        self.epsilon = epsilon
+        # 原始数据定义域
+        self.domain = domain
+        # 原始数据定义域的长度
+        self.domain_length = len(domain)
+        # 为了与论文中保持一致，这里将原始数据定义域的长度重新命名为k
+        self.k = self.domain_length
+        # 用户扰动后数据中1的个数
+        k = self.k
+        e = math.exp(self.epsilon)
+        self.d = int(round(k / (e + 1)))
+        # 所有用户的扰动数据
+        self.per_datalist = per_datalist
+        # 用户数量
+        self.n = len(per_datalist)
+        # 频率估计结果
+        self.es_data = []
+
+        # 为使用方便，定义e^\epsilon
+        e_epsilon = np.exp(self.epsilon)
+
+        # 方案中所用到的概率
+        self.q = (e_epsilon * self.d) / (e_epsilon * self.d + self.k - self.d)
+
+    def estimate(self):
+        per_data = self.per_datalist
+        array = np.sum(per_data, axis=0)
+        count_dict = dict(zip(self.domain, array))
+
+        for x in self.domain:
+            x_count = count_dict.get(x, 0)
+            rs = ((self.k - 1) * x_count - self.n * self.d + self.n * self.q) / (self.n * (self.k * self.q - self.d))
+            self.es_data.append(rs)
+
+    def get_es_data(self):
+        return self.es_data
+
+
+# 数值型数据
 class Duchi_USER(object):
     def __init__(self, epsilon: float, data: float):
         super(Duchi_USER).__init__()
@@ -846,6 +759,7 @@ class PM_SERVER(object):
         return self.es_mean
 
 
+# 集合数据
 class Wheel_USER(object):
     def __init__(self, epsilon: float, domain: list, data_list: list):
         super(Wheel_USER, self).__init__()
