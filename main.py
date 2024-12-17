@@ -19,7 +19,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+# 可通过浏览器测试是否程序运行
+@app.get("/")
+async def read_root():
+    return {"message": "Hello, World"}
 
 # 类别型单个机制
 @app.post("/categorical_one")
@@ -58,6 +61,7 @@ async def process_categorical_one(dataset: UploadFile = File(...), epsilon_low: 
 async def process_categorical_two(dataset: UploadFile = File(...), epsilon_low: float = Form(...),
                                   epsilon_high: float = Form(...), mechanism1: str = Form(...),
                                   mechanism2: str = Form(...)):
+    print('开始响应categorical_two')
     contents = await dataset.read()
     # 解码并按行分割
     lines = contents.decode().splitlines()
@@ -143,7 +147,10 @@ def categorical_mechanisms(path, epsilon_low, epsilon_high, mechanism):
         mse_list.append(mse)
     return data.domain, data.true_p, estimated_frequency_list[-1], mse_list
 
-@app.post("/categorical_three")
+@app.post("/numerical_one")
+async def process_numerical_one(dataset: UploadFile = File(...), epsilon_low: float = Form(...),
+                                  epsilon_high: float = Form(...), mechanism: str = Form(...)):
+    contets = await dataset.read()
 
 def main_set_wheel():
     data = Data('./data/set_test.csv', 'set')
