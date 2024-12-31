@@ -8,7 +8,6 @@ from LDPtool import *
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-import csv
 
 app = FastAPI()
 '''中间件跨域'''
@@ -19,12 +18,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 # 可通过浏览器测试是否程序运行
 @app.get("/")
 async def read_root():
-    return {"message": "Hello, World"}
+    return {"message": "当你看到这一行文字，说明后端部署完成"}
 
-# 类别型单个机制
+
 @app.post("/categorical_one")
 async def process_categorical_one(dataset: UploadFile = File(...), epsilon_low: float = Form(...),
                                   epsilon_high: float = Form(...), mechanism: str = Form(...)):
@@ -42,11 +43,7 @@ async def process_categorical_one(dataset: UploadFile = File(...), epsilon_low: 
 
     domain, true_frequency, estimated_frequency, mse = categorical_mechanisms(file_path, epsilon_low, epsilon_high,
                                                                               mechanism)
-    step = 0.2
-    num = int(round((epsilon_high - epsilon_low) / step)) + 1
-    epsilon_list = list(np.linspace(epsilon_low, epsilon_high, num=num))
-    for i in range(len(epsilon_list)):
-        epsilon_list[i] = round(epsilon_list[i], 1)
+    epsilon_list = get_epsilon_list(epsilon_low, epsilon_high)
 
     return {
         "domain": domain,
@@ -77,11 +74,7 @@ async def process_categorical_two(dataset: UploadFile = File(...), epsilon_low: 
                                                                                 mechanism1)
     domain, true_frequency, estimated_frequency2, mse2 = categorical_mechanisms(file_path, epsilon_low, epsilon_high,
                                                                                 mechanism2)
-    step = 0.2
-    num = int(round((epsilon_high - epsilon_low) / step)) + 1
-    epsilon_list = list(np.linspace(epsilon_low, epsilon_high, num=num))
-    for i in range(len(epsilon_list)):
-        epsilon_list[i] = round(epsilon_list[i], 1)
+    epsilon_list = get_epsilon_list(epsilon_low, epsilon_high)
 
     return {
         "domain": domain,
@@ -94,16 +87,12 @@ async def process_categorical_two(dataset: UploadFile = File(...), epsilon_low: 
     }
 
 
-# 类别型数据
+# 执行类别型数据单个机制
 def categorical_mechanisms(path, epsilon_low, epsilon_high, mechanism):
     data = Data(path, 'categorical')
 
-    # 隐私预算的间距就默认为0.2
-    step = 0.2
-    num = int(round((epsilon_high - epsilon_low) / step)) + 1
-    epsilon_list = list(np.linspace(epsilon_low, epsilon_high, num=num))
-    for i in range(len(epsilon_list)):
-        epsilon_list[i] = round(epsilon_list[i], 1)
+    epsilon_list = get_epsilon_list(epsilon_low, epsilon_high)
+
     estimated_frequency_list = []
     mse_list = []
     for epsilon in epsilon_list:
@@ -147,83 +136,182 @@ def categorical_mechanisms(path, epsilon_low, epsilon_high, mechanism):
         mse_list.append(mse)
     return data.domain, data.true_p, estimated_frequency_list[-1], mse_list
 
-@app.post("/numerical_one")
-async def process_numerical_one(dataset: UploadFile = File(...), epsilon_low: float = Form(...),
-                                  epsilon_high: float = Form(...), mechanism: str = Form(...)):
-    contets = await dataset.read()
 
-def main_set_wheel():
-    data = Data('./data/set_test.csv', 'set')
-    epsilon = 2
-    domain = data.domain
-    perturbed_data_list = []
-    # 每个用户手中持有数据的数量
-    c = len(data.data[0])
-    for x in data.data:
-        # 用户根据隐私预算，原始数据定义域，自身真实数据对类进行初始化
-        user = Wheel_USER(epsilon, data.domain, x)
-        # 用户在本地进行扰动
-        user.run()
-        # 取出扰动后的数据
-        perturbed_data = user.get_per_data()
-        perturbed_data_list.append(perturbed_data)
-    # 服务器根据隐私预算，原始数据定义域，收集到的用户扰动数据集合对类进行初始化
-    server = Wheel_SERVER(epsilon, domain, perturbed_data_list, c)
-    # 服务器进行聚合操作，估计各个数据的频率
-    server.estimate()
-    # 取出估计频率
-    estimated_frequency = server.get_es_data()
+# 执行数值型数据单个机制
+def numerical_mechanisms(path, epsilon_low, epsilon_high, mechanism):
+    data = Data(path, 'numerical')
 
+    epsilon_list = get_epsilon_list(epsilon_low, epsilon_high)
 
-def main_numeric_Duchi():
-    data = Data('./data/numeric_test.csv', 'numeric')
-    epsilon = 2.0
-    perturbed_data_list = []
-    for x in data.data:
-        # 用户根据隐私预算，原始数据定义域，自身真实数据对类进行初始化
-        user = Duchi_USER(epsilon, x)
-        # 用户在本地进行扰动
-        user.run()
-        # 取出扰动后的数据
-        perturbed_data = user.get_per_data()
-        perturbed_data_list.append(perturbed_data)
-    # 服务器根据隐私预算，原始数据定义域，收集到的用户扰动数据集合对类进行初始化
-    server = Duchi_SERVER(epsilon, perturbed_data_list)
-    # 服务器进行聚合操作，估计各个数据的频率
-    server.estimate()
-    # 取出估计频率
-    estimated_mean = server.get_es_mean()
-    true_mean = data.true_mean
+    estimated_mean_list = []
+    mse_list = []
+    for epsilon in epsilon_list:
+        perturbed_data_list = []
+        for x in data.data:
+            user = None
+            if mechanism == 'Duchi':
+                user = Duchi_USER(epsilon, x)
+            elif mechanism == 'PM':
+                user = PM_USER(epsilon, x)
+            else:
+                print('错误，机制类型未匹配')
+            user.run()
+            perturbed_data = user.get_per_data()
+            perturbed_data_list.append(perturbed_data)
+        server = None
+        if mechanism == 'Duchi':
+            server = Duchi_SERVER(epsilon, perturbed_data_list)
+        elif mechanism == 'PM':
+            server = PM_SERVER(epsilon, perturbed_data_list)
+        server.estimate()
+        estimated_mean = server.get_es_mean()
+        estimated_mean_list.append(estimated_mean)
+        mse = get_mse([data.true_mean], [estimated_mean])
+        mse_list.append(mse)
+    return data.true_mean, estimated_mean_list, mse_list
 
 
-def main_numeric_PM():
-    data = Data('./data/numeric_test.csv', 'numeric')
-    epsilon = 2.0
-    perturbed_data_list = []
-    for x in data.data:
-        # 用户根据隐私预算，原始数据定义域，自身真实数据对类进行初始化
-        user = PM_USER(epsilon, x)
-        # 用户在本地进行扰动
-        user.run()
-        # 取出扰动后的数据
-        perturbed_data = user.get_per_data()
-        perturbed_data_list.append(perturbed_data)
-    # 服务器根据隐私预算，原始数据定义域，收集到的用户扰动数据集合对类进行初始化
-    server = PM_SERVER(epsilon, perturbed_data_list)
-    # 服务器进行聚合操作，估计各个数据的频率
-    server.estimate()
-    # 取出估计频率
-    estimated_mean = server.get_es_mean()
-    true_mean = data.true_mean
+# 执行集合型数据单个机制
+def set_mechanisms(path, epsilon_low, epsilon_high, mechanism):
+    data = Data(path, 'set')
+
+    epsilon_list = get_epsilon_list(epsilon_low, epsilon_high)
+
+    estimated_frequency_list = []
+    mse_list = []
+    for epsilon in epsilon_list:
+        perturbed_data_list = []
+        for x in data.data:
+            user = None
+            if mechanism == 'Wheel':
+                user = Wheel_USER(epsilon, data.domain, x)
+            elif mechanism == 'PrivSet':
+                user = PrivSet_USER(epsilon, data.domain, x)
+            else:
+                print('错误，机制类型未匹配')
+            user.run()
+            perturbed_data = user.get_per_data()
+            perturbed_data_list.append(perturbed_data)
+        server = None
+        if mechanism == 'Wheel':
+            server = Wheel_SERVER(epsilon, data.domain, perturbed_data_list, data.set_size)
+        elif mechanism == 'PrivSet':
+            server = PrivSet_SERVER(epsilon, data.domain, perturbed_data_list, data.set_size)
+        server.estimate()
+        estimated_frequency = server.get_es_data()
+        estimated_frequency_list.append(estimated_frequency)
+        mse = get_mse(data.true_p, estimated_frequency)
+        mse_list.append(mse)
+    return data.domain, data.true_p, estimated_frequency_list[-1], mse_list
 
 
-def get_mse(lista, listb):
-    d = len(lista)
+# 执行键值型数据单个机制
+def key_value_mechanisms(path, epsilon_low, epsilon_high, mechanism):
+    data = Data(path, 'key-value')
+
+    epsilon_list = get_epsilon_list(epsilon_low, epsilon_high)
+
+    estimated_frequency_list = []
+    estimated_mean_list = []
+
+    mse_frequency_list = []
+    mse_mean_list = []
+
+    for epsilon in epsilon_list:
+        perturbed_data_list = []
+        for x in data.data:
+            user = None
+            if mechanism == 'PCKVGRR':
+                user = PCKVGRR_USER(epsilon, x, len(data.domain))
+            elif mechanism == 'PCKVUE':
+                user = PCKVUE_USER(epsilon, x, len(data.domain))
+            user.run()
+            perturbed_data = user.get_per_data()
+            perturbed_data_list.append(perturbed_data)
+        server = None
+        if mechanism == 'PCKVGRR':
+            server = PCKVGRR_SERVER(epsilon, perturbed_data_list, len(data.domain))
+        elif mechanism == 'PCKVUE':
+            server = PCKVUE_SERVER(epsilon, perturbed_data_list, len(data.domain))
+        server.estimate()
+        # 因为代码中0这个位置他没有放置元素，因此我们做一个切片
+        temp_frequency = server.F[1:]
+        estimated_frequency_list.append(temp_frequency)
+        temp_mean = server.M[1:]
+        estimated_mean_list.append(temp_mean)
+        mse_frequency = get_mse(data.true_key_p, temp_frequency)
+        mse_frequency_list.append(mse_frequency)
+        mse_mean = get_mse(data.true_mean, temp_mean)
+        mse_mean_list.append(mse_mean)
+    return estimated_frequency_list, estimated_mean_list, mse_frequency_list, mse_mean_list
+
+
+# TODO 执行位置数据单个机制
+def location_mechanisms(path, epsilon_low, epsilon_high, mechanism):
+    pass
+
+
+# 执行有序数据单个机制
+def order_mechanisms(path, epsilon_low, epsilon_high, mechanism):
+    data = Data(path, 'order')
+
+    epsilon_list = get_epsilon_list(epsilon_low, epsilon_high)
+
+    estimated_frequency_list = []
+    mse_list = []
+    for epsilon in epsilon_list:
+        perturbed_data_list = []
+        count = 0
+        for x in data.data:
+            user = None
+            if mechanism == 'EM':
+                user = EM_USER(epsilon, data.domain, x)
+            elif mechanism == 'GEM':
+                user = GEM_USER(epsilon, data.domain, x)
+            else:
+                print('错误，机制类别未匹配')
+            user.run()
+            print(count)
+            count += 1
+            perturbed_data = user.get_per_data()
+            perturbed_data_list.append(perturbed_data)
+        server = None
+        if mechanism == 'EM':
+            server = EM_SERVER(epsilon, data.domain, perturbed_data_list)
+        elif mechanism == 'GEM':
+            server = GEM_SERVER(epsilon, data.domain, perturbed_data_list)
+        server.estimate()
+        estimated_frequency = server.get_es_data()
+        estimated_frequency_list.append(estimated_frequency)
+        mse = get_mse(data.true_p, estimated_frequency)
+        mse_list.append(mse)
+    return data.domain, data.true_p, estimated_frequency_list[-1], mse_list
+
+
+# 根据隐私预算上下界，得到对应的隐私预算list
+def get_epsilon_list(epsilon_low, epsilon_high):
+    # 隐私预算的间距就默认为0.2
+    step = 0.2
+    num = int(round((epsilon_high - epsilon_low) / step)) + 1
+    epsilon_list = list(np.linspace(epsilon_low, epsilon_high, num=num))
+    for i in range(len(epsilon_list)):
+        epsilon_list[i] = round(epsilon_list[i], 1)
+    return epsilon_list
+
+
+def get_mse(list1, list2):
+    d = len(list1)
     mse = 0
     for i in range(d):
-        mse += (lista[i] - listb[i]) ** 2
+        mse += (list1[i] - list2[i]) ** 2
     return mse
 
 
+def test():
+    temp = order_mechanisms('./dataset/mini_categorical_test.txt', 1.0, 1.2, 'EM')
+    pass
+
+
 if __name__ == '__main__':
-    uvicorn.run(app=app, host="0.0.0.0", port=8006)
+    test()
+    # uvicorn.run(app=app, host="0.0.0.0", port=8006)
